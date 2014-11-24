@@ -41,14 +41,46 @@ function reverse(json) {
   }, {});
 }
 
+var template = multiline(function () {/*
+(function () {
+  'use strict';
+<% if (initializeModule) { %>
+  var module;
+  try {
+    module = angular.module('<%= moduleName %>');
+  } catch (e) {
+    module = angular.module('<%= moduleName %>', ['pascalprecht.translate']);
+  }
+  module.config(function ($translateProvider) {
+<% } else { %>
+  angular.module('<%= moduleName %>').config(function ($translateProvider) {
+<% }
+  for (var lang in translations) {
+    var out = toSingleQuotes(JSON.stringify(translations[lang]));
+    if (setLanguage) { %>
+    $translateProvider.translations('<%= lang %>', <%= out %>);
+  <% } else { %>
+    $translateProvider.translations(<%= out %>);
+  <% }
+    if (preferredLanguage) { %>
+    $translateProvider.preferredLanguage('<%= preferredLanguage %>');
+  <% }
+  } %>
+  });
+})();
+*/});
+
 module.exports = function (grunt) {
-  grunt.registerMultiTask('jsonAngularTranslate', 'The best Grunt plugin ever.', function () {
+  grunt.registerMultiTask('jsonAngularTranslate', 'Converts angular-translate JSON files into their JS equivalent.', function () {
     var extractLanguage;
     var options = this.options({
       moduleName: 'translations',
       extractLanguage: /..(?=\.[^.]*$)/,
-      hasPreferredLanguage: true,
-      createNestedKeys: true
+      setLanguage: true,
+      setPreferredLanguage: true,
+      createNestedKeys: true,
+      initializeModule: true,
+      singleFile: false
     });
 
     if (typeof(options.extractLanguage) === 'function') {
@@ -61,9 +93,8 @@ module.exports = function (grunt) {
 
     this.files.forEach(function (file) {
       // Concat specified files.
-      var language,
-          keys;
-      var src = file.src.filter(function (filepath) {
+      var language = null, translations = {}, src;
+      var srcFiles = file.src.filter(function (filepath) {
         // Warn on and remove invalid source files (if nonull was set).
         if (!grunt.file.exists(filepath)) {
           grunt.log.warn('Source file "' + filepath + '" not found.');
@@ -71,50 +102,43 @@ module.exports = function (grunt) {
         } else {
           return true;
         }
-      }).map(function (filepath) {
-        // Read file source.
-        var currLanguage = extractLanguage(filepath);
-        if (language && language !== currLanguage) {
-          throw 'inconsistent language: ' + filepath + ' (' + currLanguage + ' !== ' + language + ')';
-        }
-        language = currLanguage;
+      });
 
-        var processor = (options.createNestedKeys ? unflatten : reverse);
-        return processor(JSON.parse(grunt.file.read(filepath)));
-      }).reduce(extend, {});
+      if (options.singleFile) {
+        srcFiles.forEach(function (path) {
+          var currLanguage = extractLanguage(path);
+          var processor = (options.createNestedKeys ? unflatten : reverse);
+          translations[currLanguage] = processor(JSON.parse(grunt.file.read(path)));
+        });
+      } else {
+        translations[language] = srcFiles.map(function (filepath) {
+          var currLanguage = extractLanguage(filepath);
+          if (language && language !== currLanguage) {
+            grunt.fail.warn('Inconsistent language: ' + filepath + ' (' + currLanguage + ' !== ' + language + ')');
+          }
+          language = currLanguage;
 
-      src = grunt.template.process(multiline(options.hasPreferredLanguage ? function(){/*
-'use strict';
+          var processor = (options.createNestedKeys ? unflatten : reverse);
+          return processor(JSON.parse(grunt.file.read(filepath)));
+        }).reduce(extend, {});
+      }
 
-try {
-  angular.module('<%= moduleName %>');
-} catch (e) {
-  angular.module('<%= moduleName %>', ['pascalprecht.translate']);
-}
+      src = grunt.template.process(template, {data: {
+        // Data
+        moduleName: options.moduleName,
+        initializeModule: options.initializeModule,
+        setLanguage: options.setLanguage,
+        preferredLanguage: options.singleFile && options.setPreferredLanguage ? language : false,
+        translations: translations,
 
-angular.module('<%= moduleName %>').config(function ($translateProvider) {
-  $translateProvider.translations('<%= language %>', <%= translations %>);
-  $translateProvider.preferredLanguage('<%= language %>');
-});
-      */} : function(){/*
-'use strict';
-
-try {
-  angular.module('<%= moduleName %>');
-} catch (e) {
-  angular.module('<%= moduleName %>', ['pascalprecht.translate']);
-}
-
-angular.module('<%= moduleName %>').config(function ($translateProvider) {
-  $translateProvider.translations(<%= translations %>);
-});
-      */}), {data: {language: language, moduleName: options.moduleName, translations: toSingleQuotes(JSON.stringify(src))}});
-
+        // Functions
+        toSingleQuotes: toSingleQuotes,
+        JSON: JSON
+      }});
       src = jb(src, {'indent_size': 2, 'jslint_happy': true}) + '\n';
 
       grunt.file.write(file.dest, src);
-
-      grunt.log.writeln('File "' + file.dest + '" created.');
+      grunt.log.writeln('File ' + file.dest.cyan + ' created.');
     });
   });
 
